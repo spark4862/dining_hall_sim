@@ -34,7 +34,7 @@ class SimulationConfig:
         self.animation_speed: float = 8
         self.animation_width: int = 1600
         self.animation_height: int = 1000
-        self.record: bool = True  # 是否记录动画
+        self.record: bool = False  # 是否记录动画
         
         # 队列配置
         self.queue_capacity: int = 8
@@ -53,7 +53,7 @@ class SimulationConfig:
         self.windows_setup: List[Dict[str, Any]] = [
             {
                 "name": "snack",
-                "service_time": 70,
+                "service_time": 120,
                 "probability": 0.45,
                 "num_windows": 3
             },
@@ -223,6 +223,8 @@ class Student(salabim.Component):
     def __init__(self, *args, windows: Dict[str, salabim.Resource], 
                  queues: Dict[str, salabim.Queue],
                  window_configs: List[Dict[str, Any]], 
+                 num_before_queues: Dict[str, int],
+                 total_num: List[int],
                  config: SimulationConfig, **kwargs) -> None:
         
         """
@@ -238,6 +240,8 @@ class Student(salabim.Component):
         self.windows: Dict[str, salabim.Resource] = windows
         self.window_queues: Dict[str, salabim.Queue] = queues
         self.window_configs: List[Dict[str, Any]] = window_configs
+        self.num_before_queues: Dict[str, int] = num_before_queues
+        self.total_num: List[int] = total_num
         self.config: SimulationConfig = config
 
     def animation_objects(self, id: Any, screen_coordinates: bool = True) -> salabim.Tuple:
@@ -275,16 +279,33 @@ class Student(salabim.Component):
             if wc['name'] == chosen_window_name
         )
 
-        if len(chosen_queue) >= self.config.queue_capacity:
-            # 如果队列已满，直接离开
-            print(f"学生 {self.name} 发现 {chosen_window_name} 队列已满，离开食堂。")
+        num_windows: int = sum([x["num_windows"] for x in self.window_configs])
+
+        if self.total_num[0] >= self.config.queue_capacity * len(self.window_configs):
+            # 如果总人数超过队列容量，直接离开
+            print(f"学生 {self.name} 发现食堂已满，离开食堂。")
             return
+
+        while (len(chosen_queue) + self.num_before_queues[chosen_window_name] >= self.config.queue_capacity):
+            # 如果队列已满，直接离开
+            # print(f"学生 {self.name} 发现 {chosen_window_name} 队列已满，离开食堂。")
+            # return
+            chosen_window_name: str = np.random.choice(window_names, p=probabilities)
+            chosen_window_resource: salabim.Resource = self.windows[chosen_window_name]
+            chosen_queue: salabim.Queue = self.window_queues[chosen_window_name]
+            service_time: float = next(
+                wc['service_time'] for wc in self.window_configs
+                if wc['name'] == chosen_window_name
+            )
 
         # # 2. 计算目标队列位置
         window_position = self.config.window_positions[chosen_window_name]
         queue_bottom_x = window_position["x"] + 20
         queue_bottom_y = window_position["y"] - self.config.queue_capacity * self.Y_OFFSET - 40
 
+
+        self.total_num[0] += 1
+        self.num_before_queues[chosen_window_name] += 1
         now = self.env.now()
         an = salabim.AnimateRectangle(
             x = lambda t: salabim.interpolate(t, now, now + self.config.entrance_to_queue_time, self.config.entrance_position["x"], queue_bottom_x), 
@@ -299,7 +320,6 @@ class Student(salabim.Component):
 
         now = self.env.now()
 
-        self.q = chosen_queue
         an = salabim.AnimateRectangle(
             x = lambda q, t: salabim.interpolate(t, now, now + self.config.queue_to_tail_time, queue_bottom_x, queue_bottom_x), 
             y = lambda q, t: salabim.interpolate(t, now, now + self.config.queue_to_tail_time, queue_bottom_y, window_position["y"] - len(q) * self.Y_OFFSET - 20),
@@ -311,11 +331,8 @@ class Student(salabim.Component):
 
         self.hold(self.config.queue_to_tail_time)  # 等待到达队列尾部
         an.remove()
+        self.num_before_queues[chosen_window_name] -= 1
 
-        if len(chosen_queue) >= self.config.queue_capacity:
-            # 如果队列已满，直接离开
-            print(f"学生 {self.name} 发现 {chosen_window_name} 队列已满，离开食堂。")
-            return
 
         # 4. 进入排队队列
         self.enter(chosen_queue)
@@ -325,6 +342,7 @@ class Student(salabim.Component):
 
         # 6. 离开排队队列
         self.leave(chosen_queue)
+        self.total_num[0] -= 1
 
         # 7. 接受服务
         self.hold(service_time)
@@ -341,6 +359,8 @@ class StudentGenerator(salabim.Component):
     def __init__(self, *args, windows: Dict[str, salabim.Resource], 
                  queues: Dict[str, salabim.Queue],
                  window_configs: List[Dict[str, Any]], 
+                total_num: List[int],
+                 num_before_queues: Dict[str, int],
                  config: SimulationConfig, **kwargs) -> None:
         """
         初始化学生生成器。
@@ -355,6 +375,8 @@ class StudentGenerator(salabim.Component):
         self.windows: Dict[str, salabim.Resource] = windows
         self.window_queues: Dict[str, salabim.Queue] = queues
         self.window_configs: List[Dict[str, Any]] = window_configs
+        self.total_num: List[int] = total_num
+        self.num_before_queues: Dict[str, int] = num_before_queues
         self.config: SimulationConfig = config
 
     def process(self) -> Generator[Any, Any, None]:
@@ -368,7 +390,9 @@ class StudentGenerator(salabim.Component):
                 env=self.env,
                 windows=self.windows,
                 queues=self.window_queues,
+                total_num=self.total_num,
                 window_configs=self.window_configs,
+                num_before_queues=self.num_before_queues,
                 config=self.config
             )
 
@@ -409,6 +433,8 @@ class CanteenSimulation:
         
         self.windows: Dict[str, salabim.Resource] = self._create_resources()
         self.queues: Dict[str, salabim.Queue] = self._create_queues()
+        self.num_before_queues: Dict[str, int] = {x: 0 for x in self.queues.keys()}
+        self.total_num: List[int] = [0]
         
         # 创建队列动画
         if self.config.animation_enabled:
@@ -436,6 +462,8 @@ class CanteenSimulation:
             windows=self.windows,
             queues=self.queues,
             window_configs=self.config.windows_setup,
+            total_num=self.total_num,
+            num_before_queues=self.num_before_queues,
             config=self.config
         )
 
