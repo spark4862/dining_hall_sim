@@ -24,15 +24,15 @@ class SimulationConfig:
     def __init__(self) -> None:
         """初始化配置参数。"""
         # 模拟总时长（sec）
-        self.simulation_duration: int = 60 * 4
+        self.simulation_duration: int = 60 * 40
 
-        self.generator_stop_time: int = 120
+        self.generator_stop_time: int = 500
         
         # 学生到达食堂的平均时间间隔（sec），服从指数分布
         self.inter_arrival_time: float = 5
         
         # 动画配置
-        self.animation_enabled: bool = True
+        self.animation_enabled: bool = False
         self.animation_speed: float = 8
         self.animation_width: int = 1600
         self.animation_height: int = 1000
@@ -55,7 +55,7 @@ class SimulationConfig:
         self.windows_setup: List[Dict[str, Any]] = [
             {
                 "name": "snack",
-                "service_time": 120,
+                "service_time": 48,
                 "probability": 0.45,
                 "num_windows": 3
             },
@@ -554,34 +554,49 @@ class CanteenSimulation:
             Dict[str, Any]: 统计结果字典
         """
         results: Dict[str, Any] = {"window_stats": {}}
-        total_customers = 0
+        total_served_customers = 0
         total_waiting_time = 0.0
 
         for name, resource in self.windows.items():
             # 获取资源的基本统计信息
             capacity = resource.capacity()
-            queue_length = len(resource.requesters())
-            claimers_count = len(resource.claimers())
+            current_queue_length = len(resource.requesters())
+            current_serving = len(resource.claimers())
             
-            # 计算等待时间统计
-            waiting_time_mean = resource.requesters().length_of_stay.mean()
-            waiting_time = waiting_time_mean if waiting_time_mean and not np.isnan(waiting_time_mean) else 0.0
+            # 获取历史统计数据
+            # 获取整个模拟期间完成服务的学生总数（离开claimers队列的数量）
+            served_customers = resource.claimers().number_of_departures
+            
+            # 获取平均等待时间（基于所有已经或正在等待的学生）
+            waiting_time_stats = resource.requesters().length_of_stay
+            avg_waiting_time = waiting_time_stats.mean() if hasattr(waiting_time_stats, 'mean') else 0.0
+            avg_waiting_time = avg_waiting_time if not np.isnan(avg_waiting_time) else 0.0
+            
+            # 计算利用率（基于模拟期间的平均占用率）
+            occupancy_stats = resource.occupancy
+            utilization = occupancy_stats.mean()
+            utilization = utilization if not np.isnan(utilization) else 0.0
             
             results["window_stats"][name] = {
                 "capacity": capacity,
-                "current_queue_length": queue_length,
-                "currently_serving": claimers_count,
-                "utilization": claimers_count / capacity if capacity > 0 else 0,
-                "average_waiting_time": waiting_time
+                "current_queue_length": current_queue_length,
+                "currently_serving": current_serving,
+                "total_served_customers": served_customers,
+                "utilization": utilization,
+                "average_waiting_time": avg_waiting_time
             }
             
-            total_customers += queue_length + claimers_count
-            total_waiting_time += waiting_time * (queue_length + claimers_count)
+            total_served_customers += served_customers
+            total_waiting_time += avg_waiting_time * served_customers
         
         # 计算总体信息
-        results["total_people_in_system"] = total_customers
+        results["total_served_customers"] = total_served_customers
+        results["current_people_in_system"] = sum(
+            stats["current_queue_length"] + stats["currently_serving"] 
+            for stats in results["window_stats"].values()
+        )
         results["overall_average_waiting_time"] = (
-            total_waiting_time / total_customers if total_customers > 0 else 0
+            total_waiting_time / total_served_customers if total_served_customers > 0 else 0
         )
 
         return results
@@ -608,12 +623,14 @@ def print_results(results: Dict[str, Any], config: List[Dict[str, Any]]) -> None
         print(f"    - 窗口容量: {stats['capacity']} 个")
         print(f"    - 当前队列长度: {stats['current_queue_length']} 人")
         print(f"    - 当前服务人数: {stats['currently_serving']} 人")
+        print(f"    - 总接待学生数: {stats['total_served_customers']} 人")
         print(f"    - 利用率: {stats['utilization']:.2%}")
         if 'average_waiting_time' in stats and not np.isnan(stats['average_waiting_time']):
             print(f"    - 平均等待时间: {stats['average_waiting_time']:.2f} sec")
 
     print("-" * 60)
-    print(f"系统内总人数: {results['total_people_in_system']} 人")
+    print(f"当前系统内总人数: {results['current_people_in_system']} 人")
+    print(f"总共接待学生数: {results['total_served_customers']} 人")
     if 'overall_average_waiting_time' in results and not np.isnan(results['overall_average_waiting_time']):
         print(f"总体平均等待时间: {results['overall_average_waiting_time']:.2f} sec")
     print("=" * 60 + "\n")
