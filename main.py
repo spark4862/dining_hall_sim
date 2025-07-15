@@ -24,7 +24,9 @@ class SimulationConfig:
     def __init__(self) -> None:
         """初始化配置参数。"""
         # 模拟总时长（sec）
-        self.simulation_duration: int = 60 * 10
+        self.simulation_duration: int = 60 * 4
+
+        self.generator_stop_time: int = 120
         
         # 学生到达食堂的平均时间间隔（sec），服从指数分布
         self.inter_arrival_time: float = 5
@@ -379,12 +381,16 @@ class StudentGenerator(salabim.Component):
         self.num_before_queues: Dict[str, int] = num_before_queues
         self.config: SimulationConfig = config
 
-    def process(self) -> Generator[Any, Any, None]:
+    def process(self):
         """
         定义生成学生的行为过程。
         """
         while True:
             # 按照指数分布的时间间隔生成一个学生
+            if self.env.now() >= self.config.simulation_duration - self.config.generator_stop_time:
+                print("生成器已停止。")
+                return
+
             self.hold(salabim.Exponential(self.config.inter_arrival_time).sample())
             Student(
                 env=self.env,
